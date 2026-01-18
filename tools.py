@@ -34,7 +34,7 @@ def tavily_search(query: str) -> str:
             "search_depth": "basic",
             "max_results": 5
         }
-        response = requests.post(url, json=payload, timeout=20)
+        response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         data = response.json()
         
