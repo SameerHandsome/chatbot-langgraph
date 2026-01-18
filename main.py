@@ -1,3 +1,7 @@
+"""
+basic_agent/main.py - Basic Agent FastAPI with Streaming
+"""
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,11 +27,11 @@ async def lifespan(app: FastAPI):
     """Lifespan event handler"""
     global agent_graph, memory_manager
     
-    print(" Starting Basic Agent...")
+    print("🚀 Starting Basic Agent...")
     agent_graph, memory_manager = create_agent()
-    print(" Basic Agent initialized")
-    print(" Features: Memory, Tool Calling, Streaming")
-    print(" No advanced features (retry, budget, guardrails, etc.)")
+    print("✅ Basic Agent initialized")
+    print("📊 Features: Memory, Tool Calling, Streaming")
+    print("❌ No advanced features (retry, budget, guardrails, etc.)")
     
     yield
     
@@ -42,6 +46,7 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Add CORS middleware for Streamlit frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -148,7 +153,7 @@ async def chat_stream(request: ChatRequest):
     Features:
     - Real token-by-token streaming
     - Conversation memory
-    - Tool calling
+    - Tool calling with results
     
     Returns:
     Server-Sent Events (SSE) stream with JSON chunks
@@ -158,6 +163,7 @@ async def chat_stream(request: ChatRequest):
     
     async def generate():
         try:
+            # Get conversation context
             context = memory_manager.get_context(request.session_id)
             
             messages = []
@@ -165,15 +171,19 @@ async def chat_stream(request: ChatRequest):
                 messages.append(SystemMessage(content=context))
             messages.append(HumanMessage(content=request.message))
             
+            # Store full response
             full_response = ""
             current_content = ""
+            tool_outputs = []
             
+            # Stream the response with astream_events for token-level streaming
             async for event in agent_graph.astream_events(
                 {"messages": messages},
                 version="v1"
             ):
                 kind = event.get("event")
                 
+                # Handle streaming tokens from LLM
                 if kind == "on_chat_model_stream":
                     chunk = event.get("data", {}).get("chunk", {})
                     if hasattr(chunk, 'content'):
@@ -188,6 +198,7 @@ async def chat_stream(request: ChatRequest):
                             yield f"data: {json.dumps(chunk_data)}\n\n"
                             await asyncio.sleep(0.01)
                 
+                # Handle tool calls
                 elif kind == "on_chat_model_end":
                     chunk = event.get("data", {}).get("output", {})
                     if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
@@ -197,26 +208,56 @@ async def chat_stream(request: ChatRequest):
                         }
                         yield f"data: {json.dumps(tool_info)}\n\n"
                         await asyncio.sleep(0.01)
+                        # Save content before tool execution
+                        if current_content:
+                            full_response = current_content
+                        # Reset content for response after tool execution
                         current_content = ""
                 
+                # Handle tool execution START
+                elif kind == "on_tool_start":
+                    tool_name = event.get("name", "unknown")
+                    tool_start_data = {
+                        "type": "tool_start",
+                        "tool": tool_name
+                    }
+                    yield f"data: {json.dumps(tool_start_data)}\n\n"
+                    await asyncio.sleep(0.01)
+                
+                # Handle tool execution END with output
                 elif kind == "on_tool_end":
+                    tool_name = event.get("name", "unknown")
+                    tool_output = event.get("data", {}).get("output", "")
+                    
+                    # Store tool output
+                    tool_outputs.append({
+                        "tool": tool_name,
+                        "output": tool_output
+                    })
+                    
                     tool_data = {
                         "type": "tool_result",
-                        "status": "completed"
+                        "status": "completed",
+                        "tool": tool_name,
+                        "preview": str(tool_output)[:200] + "..." if len(str(tool_output)) > 200 else str(tool_output)
                     }
                     yield f"data: {json.dumps(tool_data)}\n\n"
                     await asyncio.sleep(0.01)
             
-            full_response = current_content
+            # Final response is the last accumulated content
+            full_response = current_content if current_content else full_response
             
+            # Save to memory
             if full_response:
                 memory_manager.add_message(request.session_id, "user", request.message)
                 memory_manager.add_message(request.session_id, "assistant", full_response)
             
+            # Send completion message
             completion_data = {
                 "type": "done",
                 "session_id": request.session_id,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
+                "tool_count": len(tool_outputs)
             }
             yield f"data: {json.dumps(completion_data)}\n\n"
             
@@ -281,5 +322,4 @@ if __name__ == "__main__":
     print("="*60)
     print("🤖 Basic Agent API with Streaming")
     print("="*60)
-    
     uvicorn.run(app, host="0.0.0.0", port=8001)
