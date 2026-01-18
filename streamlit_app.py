@@ -10,15 +10,18 @@ import uuid
 from datetime import datetime
 import sqlite3
 
+# Configuration
 BACKEND_URL = "http://localhost:8001"
-BACKEND_DB = "chat_history.db"  
+BACKEND_DB = "chat_history.db"  # Same DB as backend
 
+# Page config
 st.set_page_config(
     page_title="AI Agent Chat",
     page_icon="🤖",
     layout="wide"
 )
 
+# Custom CSS
 st.markdown("""
     <style>
     .main {
@@ -119,6 +122,7 @@ def load_session(session_id: str):
     st.session_state.session_id = session_id
     st.session_state.messages = []
     
+    # Load history from backend
     history = get_chat_history(session_id)
     if history:
         for msg in history:
@@ -157,13 +161,16 @@ def send_message_streaming(message: str):
         if response.status_code != 200:
             return f"Error: {response.status_code}"
         
+        # Placeholders for streaming
         tool_placeholder = st.empty()
         message_placeholder = st.empty()
         
         full_response = ""
         tool_calls = []
+        tool_results = []
         current_tools_shown = False
         
+        # Process stream line by line
         for line in response.iter_lines():
             if line:
                 line = line.decode('utf-8')
@@ -177,21 +184,33 @@ def send_message_streaming(message: str):
                             tool_placeholder.markdown(f"🔧 **Using tools:** {', '.join(tools)}")
                             current_tools_shown = True
                         
+                        elif data.get("type") == "tool_start":
+                            tool_name = data.get("tool", "unknown")
+                            tool_placeholder.markdown(f"⚙️ **Executing:** {tool_name}...")
+                        
+                        elif data.get("type") == "tool_result":
+                            tool_name = data.get("tool", "unknown")
+                            preview = data.get("preview", "")
+                            tool_results.append(f"{tool_name}: {preview[:100]}")
+                            tool_placeholder.markdown(f"✅ **Completed:** {tool_name}")
+                        
                         elif data.get("type") == "token":
+                            # TRUE TOKEN-BY-TOKEN STREAMING
                             full_response = data.get("content", "")
-                            message_placeholder.markdown(full_response + "▌")  
+                            message_placeholder.markdown(full_response + "▌")  # Show cursor
                         
                         elif data.get("type") == "content":
+                            # Fallback for complete content
                             full_response = data.get("content", "")
                             message_placeholder.markdown(full_response + "▌")
                         
-                        elif data.get("type") == "tool_result":
-                            if current_tools_shown and tool_calls:
-                                tool_placeholder.markdown(f"✅ **Used tools:** {', '.join(set(tool_calls))}")
-                        
                         elif data.get("type") == "done":
+                            # Remove cursor and clear tool placeholder
                             if full_response:
                                 message_placeholder.markdown(full_response)
+                            else:
+                                message_placeholder.warning("No response generated. The tool may have encountered an issue.")
+                            
                             if current_tools_shown:
                                 tool_placeholder.empty()
                             break
@@ -218,9 +237,11 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 
+# Sidebar
 with st.sidebar:
     st.title("🤖 AI Agent")
     
+    # Check backend status (silently)
     is_healthy = check_backend_health()
     
     if not is_healthy:
@@ -229,6 +250,7 @@ with st.sidebar:
     
     st.divider()
     
+    # New Chat Button
     if st.button("➕ New Chat", use_container_width=True, type="primary"):
         create_new_session()
     
@@ -243,8 +265,10 @@ with st.sidebar:
         for session_id, first_msg, last_msg, msg_count in sessions:
             is_current = session_id == st.session_state.session_id
             
+            # Get preview text
             preview = get_session_preview(session_id)
             
+            # Format timestamp
             try:
                 last_time = datetime.fromisoformat(last_msg)
                 time_str = last_time.strftime("%b %d, %I:%M %p")
@@ -254,6 +278,7 @@ with st.sidebar:
             col1, col2 = st.columns([5, 1])
             
             with col1:
+                # Session button with preview
                 button_label = f"{'📍' if is_current else '💬'} {preview}"
                 if st.button(
                     button_label,
@@ -265,6 +290,7 @@ with st.sidebar:
                     load_session(session_id)
             
             with col2:
+                # Delete button
                 if len(sessions) > 1 or not is_current:
                     if st.button("🗑️", key=f"delete_{session_id}", help="Delete"):
                         if clear_backend_history(session_id):
@@ -277,6 +303,7 @@ with st.sidebar:
     
     st.divider()
     
+    # Current Session Info
     with st.expander("ℹ️ Current Session"):
         st.text(f"ID: {st.session_state.session_id[:16]}...")
         st.text(f"Messages: {len(st.session_state.messages)}")
@@ -289,6 +316,7 @@ with st.sidebar:
     
     st.divider()
     
+    # Info
     with st.expander("🔧 Features"):
         st.markdown("""
         - 💬 **Streaming responses**
@@ -309,11 +337,14 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Chat input
 if prompt := st.chat_input("Type your message here...", disabled=not is_healthy):
+    # Add user message to chat
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
+    # Get streaming response
     with st.chat_message("assistant"):
         response = send_message_streaming(prompt)
         
@@ -322,6 +353,7 @@ if prompt := st.chat_input("Type your message here...", disabled=not is_healthy)
                 "role": "assistant",
                 "content": response
             })
+
 
 st.divider()
 current_preview = get_session_preview(st.session_state.session_id)
